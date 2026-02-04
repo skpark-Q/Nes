@@ -1,4 +1,6 @@
-name: Daily Stock News Report
+- name: Install dependencies
+        run: |
+          pip install gspread google-genai newsapi-python # google-generativeai 대신 google-genai 설치!
 
 on:
   schedule:
