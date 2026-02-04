@@ -1,0 +1,31 @@
+name: Daily Stock News Report
+
+on:
+  schedule:
+    # 한국 시간(KST) 06:23 -> UTC 21:23
+    - cron: '23 21 * * *'
+  workflow_dispatch: # 수동 실행 버튼 추가!
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install gspread google-generativeai newsapi-python oauth2client
+
+      - name: Run Script
+        env:
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        run: python stock_news_automation.py
