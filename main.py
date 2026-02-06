@@ -3,11 +3,15 @@ import yfinance as yf
 from bs4 import BeautifulSoup
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from google import genai
 from datetime import datetime, timedelta
 
 # [환경 변수 설정]
 EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
 EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # 16개 우량주 맵
 STOCK_MAP = {
@@ -17,128 +21,127 @@ STOCK_MAP = {
     "버크셔 해서웨이": "BRK-B", "팔란티어": "PLTR", "월마트": "WMT", "코스트코": "COST"
 }
 
-def get_stock_info(ticker):
-    """주가, 등락률, 시총 및 깃발 판단"""
+def get_market_context():
+    """상단 시장 요약 (나스닥, S&P500, VIX)"""
     try:
-        stock = yf.Ticker(ticker)
-        fast = stock.fast_info
-        current, prev = fast['last_price'], fast['previous_close']
-        pct = ((current - prev) / prev) * 100
-        
-        flags = []
-        # 실적 발표 임박 (🚩) - 캘린더 데이터 확인
-        try:
-            cal = stock.calendar
-            if cal is not None and not cal.empty:
-                days_left = (cal.iloc[0, 0] - datetime.now().date()).days
-                if 0 <= days_left <= 7: flags.append("🚩")
-        except: pass
-        
-        # 변동성 주의 (⚠️) 및 신고가 (✨)
-        if abs(pct) >= 3.5: flags.append("⚠️")
-        if current >= (fast['year_high'] * 0.98): flags.append("✨")
+        indices = {"나스닥": "^IXIC", "S&P500": "^GSPC", "공포지수(VIX)": "^VIX"}
+        summary = []
+        for name, ticker in indices.items():
+            idx = yf.Ticker(ticker).fast_info
+            pct = ((idx['last_price'] - idx['previous_close']) / idx['previous_close']) * 100
+            color = "#d93025" if pct > 0 else "#1a73e8"
+            summary.append(f"{name}: <b style='color:{color};'>{pct:+.2f}%</b>")
+        return " | ".join(summary)
+    except: return "시장 지표를 불러오는 중입니다..."
 
+def get_fundamental_data(ticker):
+    """체력 측정 데이터 수집 ($PER$, 배당률, 목표주가)"""
+    try:
+        s = yf.Ticker(ticker)
+        info = s.info
+        fast = s.fast_info
+        
+        curr = fast['last_price']
+        target = info.get('targetMeanPrice', 0)
+        # 전문가 목표가 대비 상승 여력 계산
+        upside = ((target / curr) - 1) * 100 if target > 0 else 0
+        
+        per = info.get('trailingPE', '-')
+        div = info.get('dividendYield', 0) * 100 if info.get('dividendYield') else 0
+        
         return {
-            "price": f"{current:,.2f}",
-            "pct": round(pct, 2),
-            "cap": f"{stock.info.get('marketCap', 0) / 1_000_000_000_000:,.2f}",
-            "flags": "".join(flags)
+            "upside": round(upside, 1),
+            "per": f"{per:.1f}" if per != '-' else "-",
+            "div": f"{div:.1f}%"
         }
-    except:
-        return {"price": "-", "pct": 0, "cap": "-", "flags": ""}
+    except: return {"upside": 0, "per": "-", "div": "-"}
 
-def fetch_reason_news(brand, pct):
-    """
-    🔥 [핵심 고도화] 등락률에 따라 '이유'를 분석하는 뉴스를 정밀 수집합니다.
-    """
-    # 기본 검색어: 브랜드 + 주식 + 분석/이유/실적/전망
-    search_query = f"{brand} 주식 (이유 OR 분석 OR 실적 OR 전망 OR 왜)"
-    
-    # 주가가 크게 변했을 때(3% 이상)는 검색어에 '급등/급락'을 강제로 넣습니다.
-    if pct >= 3.0: search_query += " 급등"
-    elif pct <= -3.0: search_query += " 급락"
-    
-    encoded_query = urllib.parse.quote(search_query)
-    url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
-    
+def analyze_sentiment(ticker, news_list):
+    """AI가 기사 제목으로 심리 온도 분석"""
+    if not news_list: return "[데이터 없음]"
+    titles = "\n".join([n['title'] for n in news_list])
+    prompt = f"다음 {ticker} 뉴스 제목들을 보고 [긍정, 중립, 부정] 비율을 합쳐서 100이 되게 숫자만 보내줘. 형식: 70/20/10\n뉴스:\n{titles}"
+    try:
+        res = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
+        nums = res.text.strip().split('/')
+        return f"😊긍정 {nums[0]}% | 😐중립 {nums[1]}% | 😡부정 {nums[2]}%"
+    except: return "투자 심리 분석 중..."
+
+def fetch_reason_news(brand):
+    """한국어 뉴스 수집"""
+    query = urllib.parse.quote(f"{brand} 주식 (이유 OR 분석 OR 전망)")
+    url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
     try:
         res = requests.get(url, timeout=10)
         soup = BeautifulSoup(res.content, "xml")
         items = soup.find_all("item")
-        
         results = []
         for item in items:
             title = item.title.text
-            # 한글 기사만 필터링하며, 단순 제품 리뷰나 가십성 기사는 배제하도록 노력합니다.
             if bool(re.search('[가-힣]', title)) and len(results) < 3:
                 results.append({"title": title, "link": item.link.text})
         return results
     except: return []
 
 if __name__ == "__main__":
-    print("🚀 작업을 시작합니다, 형님!! (고대비+심층뉴스 버전)")
+    print("🚀 형님! 고도화 리포트 작성을 시작합니다!!")
+    market_html = get_market_context()
     
-    # [디자인] 고대비 테마 적용
     html_body = f"""
     <html>
-    <body style="font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #ffffff; color: #111111; padding: 20px;">
-        <div style="max-width: 600px; margin: auto; border: 2px solid #333333; padding: 25px; border-radius: 4px;">
-            <h1 style="margin: 0 0 10px 0; font-size: 24px; border-bottom: 3px solid #111;">📰 월스트리트 16대 우량주 리포트</h1>
-            
-            <div style="background-color: #f0f0f0; padding: 12px; margin-bottom: 25px; font-size: 13px; line-height: 1.6;">
-                <strong>[알림 가이드]</strong><br>
-                🚩 <span style="color: #d93025;">실적발표 임박</span> | ⚠️ <span style="color: #f9ab00;">변동성 주의(±3.5%↑)</span> | ✨ <span style="color: #1a73e8;">52주 신고가 근접</span>
+    <body style="font-family: 'Malgun Gothic', sans-serif; background-color: #ffffff; color: #111; padding: 20px;">
+        <div style="max-width: 650px; margin: auto; border: 1px solid #000; padding: 25px;">
+            <h1 style="border-bottom: 3px solid #000; padding-bottom: 10px; margin: 0;">🏛️ 월스트리트 전략 리포트 (2026)</h1>
+            <div style="background: #f9f9f9; padding: 15px; margin-top: 15px; font-size: 14px; border: 1px solid #ddd;">
+                <strong>🌍 시장 전체 맥락:</strong> {market_html}
             </div>
     """
 
     for brand, ticker in STOCK_MAP.items():
         print(f"🔍 {brand}({ticker}) 처리 중...")
-        data = get_stock_info(ticker)
-        news = fetch_reason_news(brand, data['pct'])
+        # 기존 데이터 + 신규 데이터 합치기
+        stock_obj = yf.Ticker(ticker)
+        fast = stock_obj.fast_info
+        pct = ((fast['last_price'] - fast['previous_close']) / fast['previous_close']) * 100
         
-        # [색상 대비] 상승(빨강), 하락(파랑) - 텍스트 대비 고려
-        color = "#d93025" if data['pct'] > 0 else "#1a73e8"
-        bg_color = "#fce8e6" if data['pct'] > 0 else "#e8f0fe"
-        sign = "+" if data['pct'] > 0 else ""
+        fund = get_fundamental_data(ticker)
+        news = fetch_reason_news(brand)
+        sent = analyze_sentiment(ticker, news)
+        
+        color = "#d93025" if pct > 0 else "#1a73e8"
+        upside_color = "#d93025" if fund['upside'] > 0 else "#1a73e8"
 
         html_body += f"""
-        <div style="margin-bottom: 30px; border-bottom: 1px solid #ddd; padding-bottom: 20px;">
-            <div style="display: flex; justify-content: space-between; align-items: flex-end; background-color: {bg_color}; padding: 10px; border-radius: 4px;">
-                <div style="font-size: 20px; font-weight: 900;">{brand} <span style="font-size: 12px; color: #555;">{ticker}</span> {data['flags']}</div>
-                <div style="text-align: right;">
-                    <div style="font-size: 18px; font-weight: bold; color: {color};">{sign}{data['pct']}%</div>
-                    <div style="font-size: 14px; color: #111;">${data['price']}</div>
-                </div>
+        <div style="margin-top: 30px; border-bottom: 1px solid #eee; padding-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                <span style="font-size: 22px; font-weight: 900;">{brand} <small style="color:#777;">{ticker}</small></span>
+                <span style="font-size: 18px; font-weight: bold; color: {color};">{pct:+.2f}%</span>
             </div>
-            <div style="font-size: 11px; color: #777; margin: 5px 0 10px 0;">시가총액: {data['cap']}T 달러</div>
             
-            <div style="margin-left: 5px;">
+            <div style="margin: 10px 0; font-size: 13px; color: #444; background: #fdfdfd; padding: 10px; border: 1px solid #eee;">
+                <b>📈 체력 측정:</b> 목표가 대비 <span style="color:{upside_color}; font-weight:bold;">{fund['upside']:+.1f}% 여력</span> | 
+                $PER$: <b>{fund['per']}배</b> | 배당: <b>{fund['div']}</b>
+            </div>
+            
+            <div style="font-size: 13px; margin-bottom: 10px; color: #1a73e8; font-weight: bold;">
+                🔥 심리 온도: {sent}
+            </div>
+
+            <ul style="margin: 0; padding-left: 20px; font-size: 14px;">
         """
-        
-        if not news:
-            html_body += "<div style='color:#999; font-size: 13px;'>최근 관련 분석 뉴스가 없습니다.</div>"
-        else:
-            for n in news:
-                html_body += f"""
-                <div style="margin-bottom: 10px;">
-                    <a href="{n['link']}" style="color: #111; text-decoration: none; font-size: 14px; font-weight: 500; display: block;">• {n['title']}</a>
-                </div>
-                """
-        html_body += "</div></div>"
-        time.sleep(1)
+        for n in news:
+            html_body += f"<li style='margin-bottom: 8px;'><a href='{n['link']}' style='color:#111; text-decoration:none;'>• {n['title']}</a></li>"
+        html_body += "</ul></div>"
+        time.sleep(12)
 
     html_body += "</div></body></html>"
 
-    # [발송]
+    # [발송] (이전 코드와 동일하므로 생략 가능하나 완결성을 위해 유지)
     msg = MIMEMultipart("alternative")
-    msg['Subject'] = f"[{datetime.now().strftime('%m/%d')}] 형님! 필터링 완료된 명품 주식 리포트입니다."
+    msg['Subject'] = f"[{datetime.now().strftime('%m/%d')}] 🏛️ 형님! 전략 리포트(지표+심리+체력) 도착했습니다."
     msg['From'], msg['To'] = EMAIL_ADDRESS, EMAIL_ADDRESS
     msg.attach(MIMEText(html_body, "html"))
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
-            s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-            s.send_message(msg)
-        print("✅ 리포트 발송 성공!")
-    except Exception as e:
-        print(f"❌ 실패: {e}")
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
+        s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+        s.send_message(msg)
+    print("✅ 발송 성공!")
