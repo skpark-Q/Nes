@@ -1,4 +1,4 @@
-name: Daily Stock Strategy Report
+name: Daily Stock High-Speed Report
 
 on:
   schedule:
@@ -19,12 +19,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # 🚀 필요한 모든 부품을 한꺼번에 설치합니다!
-          pip install google-genai yfinance beautifulsoup4 lxml requests
+          # 🚀 AI 빼고 필요한 핵심 부품만 설치!
+          pip install yfinance beautifulsoup4 lxml requests
           
       - name: Run Script
         env:
           EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
