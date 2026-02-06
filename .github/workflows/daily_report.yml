@@ -21,7 +21,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install gspread google-genai newsapi-python
+          pip install gspread newsapi-python deep-translator
           # 필요한 라이브러리를 설치하는 과정입니다.
 
       - name: Run Script
