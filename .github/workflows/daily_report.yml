@@ -1,4 +1,4 @@
-name: Daily Stock News Crawling
+name: Daily Stock Strategy Report
 
 on:
   schedule:
@@ -19,11 +19,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # 🚀 크롤링을 위한 최소한의 도구만 설치합니다.
-          pip install gspread newsapi-python deep-translator yfinance beautifulsoup4 lxml requests
-
+          # 🚀 필요한 모든 부품을 한꺼번에 설치합니다!
+          pip install google-genai yfinance beautifulsoup4 lxml requests
+          
       - name: Run Script
         env:
           EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
