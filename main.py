@@ -13,7 +13,9 @@ EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
 RECIPIENTS = [
     EMAIL_ADDRESS,           # 형님 본인
     "yhkwon@spigen.com",     # 파트너 1
-    "jynoh@spigen.com"       # 파트너 2
+    "jynoh@spigen.com",      # 파트너 2
+    "mako@spigen.com",       # 파트너 3
+    "jhkang@spigen.com"      # 파트너 4
 ]
 
 # 16대 우량주 리스트
