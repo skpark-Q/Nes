@@ -34,12 +34,8 @@ EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
 EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
 
 RECIPIENTS = [
-    EMAIL_ADDRESS,           # 형님 본인
-    "yhkwon@spigen.com",     # 파트너 1
-    "jynoh@spigen.com",      # 파트너 2
-    "mako@spigen.com",       # 파트너 3
-    "jhkang@spigen.com"      # 파트너 4
-]
+    EMAIL_ADDRESS           # 형님 본인
+    ]
 
 STOCK_MAP = {
     "애플": "AAPL", "마이크로소프트": "MSFT", "엔비디아": "NVDA", "알파벳": "GOOGL",
