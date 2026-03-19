@@ -2,7 +2,7 @@
 ================================================================================
 [ 🏛️ VIP 주식 전략 리포트 - 통합 설계 변경 이력 (Design Change History) ]
 ================================================================================
-최종 수정일: 2026-03-19 | 현재 버전: v3.3
+최종 수정일: 2026-03-19 | 현재 버전: v3.4
 --------------------------------------------------------------------------------
 날짜        | 버전         | 설계 변경 및 업데이트 내역
 --------------------------------------------------------------------------------
@@ -16,7 +16,8 @@
 2026-03-17 | v3.0         | when:1d 최신성 필터 및 사회/경제 헤드라인 섹션 추가
 2026-03-18 | v3.1         | 헤드라인 중복 제거 및 사회/경제(4:3) 정밀 믹싱 로직 적용
 2026-03-19 | v3.2         | 헤드라인 중복 필터 고도화 및 불필요 태그 제거 적용
-2026-03-19 | v3.3         | [최신] 국내/국제 섹션 분리(7개씩), 출처 표기 제거, 요약성 기사 필터링 적용
+2026-03-19 | v3.3         | 국내/국제 섹션 분리(7개씩), 출처 표기 제거, 요약성 기사 필터링
+2026-03-19 | v3.4         | [최신] 경제 기사 지분 강제 확보(4:3), 키워드 기반 중복 차단, 금지어(책 소개 등) 강화
 ================================================================================
 """
 
@@ -27,19 +28,18 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
-# [1. 환경 변수 및 수신인 설정] --------------------------------------------------
+# [1. 환경 변수 및 수신인 설정]
 EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
 EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
 
 RECIPIENTS = [
-    EMAIL_ADDRESS,           # 형님 본인
-    "yhkwon@spigen.com",     # 파트너 1
-    "jynoh@spigen.com",      # 파트너 2
-    "mako@spigen.com",       # 파트너 3
-    "jhkang@spigen.com"      # 파트너 4
+    EMAIL_ADDRESS,
+    "yhkwon@spigen.com",
+    "jynoh@spigen.com",
+    "mako@spigen.com",
+    "jhkang@spigen.com"
 ]
 
-# [2. 분석 대상 종목 데이터베이스] ------------------------------------------------
 STOCK_MAP = {
     "애플": "AAPL", "마이크로소프트": "MSFT", "엔비디아": "NVDA", "알파벳": "GOOGL",
     "아마존": "AMZN", "메타": "META", "테슬라": "TSLA", "브로드컴": "AVGO",
@@ -48,7 +48,6 @@ STOCK_MAP = {
 }
 
 def get_market_summary():
-    """상단 시장 지수 정보 수집 (v1.3, v2.0)"""
     try:
         results = []
         indices = {"나스닥": "^IXIC", "S&P500": "^GSPC", "공포지수(VIX)": "^VIX"}
@@ -68,7 +67,6 @@ def get_market_summary():
     except: return "시장 데이터 로딩 중..."
 
 def get_stock_details(ticker):
-    """개별 종목 재무 지표 및 투자의견 산출 (v2.0, v2.1)"""
     try:
         s = yf.Ticker(ticker)
         f, info = s.fast_info, s.info
@@ -105,20 +103,13 @@ def get_stock_details(ticker):
     except: return None
 
 def clean_news_title(title):
-    """
-    [2026-03-19 v3.3] 뉴스 제목 정제 함수
-    1. 출처(언론사명) 제거 (보통 ' - 언론사' 형식)
-    2. [속보], [종합] 등 불필요한 태그 박멸
-    """
-    # 출처 제거 (뒤에서부터 ' - ' 를 찾아 그 앞부분만 취함)
+    """제목에서 출처 및 불필요 태그 제거 (v3.3)"""
     if " - " in title:
         title = title.rsplit(" - ", 1)[0]
-    # 불필요 태그 제거
     title = re.sub(r'\[속보\]|\[종합\]|\[.*?보\]|\[포토\]|\[단독\]|\[리포트\]', '', title).strip()
     return title
 
 def fetch_korean_news(brand):
-    """종목별 당일 핵심 뉴스 수집 (v1.1, v3.0, v3.3)"""
     query = urllib.parse.quote(f"{brand} 주식 (마감 OR 종가) when:1d")
     url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
     try:
@@ -134,45 +125,65 @@ def fetch_korean_news(brand):
         return "".join(links)
     except: return "<li>뉴스를 불러오지 못했습니다.</li>"
 
-def fetch_categorized_headlines(category_query):
+def fetch_categorized_headlines(queries_with_counts):
     """
-    [2026-03-19 v3.3] 특정 카테고리의 헤드라인을 수집 및 정제합니다.
-    요약성 기사(오늘의 뉴스, 일정 등)를 필터링합니다.
+    [2026-03-19 v3.4] 중복 완벽 차단 및 금지어 강화 로직
+    queries_with_counts: {"검색어": 가져올개수}
     """
-    # [2026-03-19 v3.3] 요약성 기사 제외를 위한 블랙리스트 키워드
-    black_list = ["오늘의 뉴스", "데일리 뉴스", "주요 일정", "일정 정리", "조간 브리핑", "뉴스 7", "뉴스 9", "카드뉴스"]
+    # ❌ 형님이 싫어하시는 금지어 리스트 (v3.4 강화)
+    black_list = ["책 소개", "도서", "신간", "출판", "오늘의 뉴스", "데일리 뉴스", "일정", "조간", "뉴스 7", "뉴스 9", "브리핑"]
     
-    q = urllib.parse.quote(f"{category_query} when:1d")
-    u = f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
-    found = []
-    seen_keys = set()
+    found_html = []
+    seen_keywords = set() # 핵심 키워드 중복 체크용 (v3.4)
+
+    for sub_query, count in queries_with_counts.items():
+        q = urllib.parse.quote(f"{sub_query} when:1d")
+        u = f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
+        
+        try:
+            r = requests.get(u, timeout=5)
+            s = BeautifulSoup(r.content, "xml")
+            items_count = 0
+            for item in s.find_all("item"):
+                title = item.title.text
+                # 1. 금지어 필터
+                if any(word in title for word in black_list): continue
+                if bool(re.search('[가-힣]', title)):
+                    clean_t = clean_news_title(title)
+                    
+                    # 2. [v3.4] 지능형 키워드 중복 제거 (제목에서 의미 있는 단어 2개 추출)
+                    # '메디컬코리아 2026 개막' -> {'메디컬', '코리아'}
+                    words = set(re.findall(r'[가-힣]{2,}', clean_t))
+                    if words:
+                        # 이미 나온 기사의 핵심 단어들과 2개 이상 겹치면 중복으로 간주
+                        is_duplicate = False
+                        for seen in seen_keywords:
+                            if len(words & seen) >= 2: 
+                                is_duplicate = True
+                                break
+                        if is_duplicate: continue
+                        seen_keywords.add(frozenset(words))
+
+                    found_html.append(f"<li style='margin-bottom:6px;'><a href='{item.link.text}' style='color:#111; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
+                    items_count += 1
+                if items_count >= count: break
+        except: pass
     
-    try:
-        r = requests.get(u, timeout=5)
-        s = BeautifulSoup(r.content, "xml")
-        for item in s.find_all("item"):
-            title = item.title.text
-            # 블랙리스트 필터링
-            if any(word in title for word in black_list): continue
-            if bool(re.search('[가-힣]', title)):
-                clean_t = clean_news_title(title)
-                # 유사도 중복 제거 (v3.2 로직)
-                content_key = re.sub(r'[^가-힣0-9]', '', clean_t)[:12]
-                if content_key not in seen_keys:
-                    found.append(f"<li style='margin-bottom:6px;'><a href='{item.link.text}' style='color:#111; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
-                    seen_keys.add(content_key)
-            if len(found) >= 7: break
-    except: pass
-    return "".join(found)
+    return "".join(found_html[:7]) # 최종적으로 7개만 반환
 
 if __name__ == "__main__":
-    print("🚀 VIP 리포트 생성 중... (v3.3 국내/국제 분리 및 제목 정제 버전)")
+    print("🚀 VIP 리포트 생성 중... (v3.4 경제 지분 확보 및 중복 차단 버전)")
     m_context = get_market_summary()
     
-    # [2026-03-19 v3.3] 국내(사회/경제) 및 국제 뉴스 각각 7개 수집
-    domestic_html = fetch_categorized_headlines("사회 경제 주요 뉴스 -일정 -오늘의")
-    international_html = fetch_categorized_headlines("국제 세계 해외 정세 -일정 -오늘의")
+    # [2026-03-19 v3.4] 국내: 경제 4개 + 사회 3개로 지분 강제 고정
+    domestic_queries = {"경제 주요 뉴스": 4, "사회 주요 뉴스": 3}
+    domestic_html = fetch_categorized_headlines(domestic_queries)
     
+    # [2026-03-19 v3.4] 국제: 7개 (키워드 중복 제거 강화)
+    international_queries = {"국제 세계 정세 뉴스": 7}
+    international_html = fetch_categorized_headlines(international_queries)
+    
+    mail_date = datetime.now().strftime('%m/%d')
     html = f"""
     <html>
     <body style="font-family: 'Malgun Gothic', sans-serif; background-color: #ffffff; padding: 20px;">
@@ -216,7 +227,7 @@ if __name__ == "__main__":
                 </div>
             </div>
             <div style="padding: 15px; background: #fff;">
-                <table style="width: 100%; font-size: 13px; margin-bottom: 12px;">
+                <table style="width: 100%; font-size: 13px; border-collapse: collapse; margin-bottom: 12px;">
                     <tr><td>상승여력: <b style="color:{d['u_color']};">{d['upside']}</b></td><td>저점대비: <b style="color:{d['l_color']};">{d['dist_low']}</b></td></tr>
                     <tr><td>PER: <b style="color:{d['p_color']};">{d['per']}배</b></td><td>배당률: <b style="color:{d['d_color']};">{d['div']}</b></td></tr>
                     <tr><td>투자의견: <b>{d['opinion']}</b></td><td>시가총액: <b>{d['cap']}</b></td></tr>
@@ -228,9 +239,6 @@ if __name__ == "__main__":
         time.sleep(0.5)
 
     html += "</div></body></html>"
-    
-    # [2026-03-19 v3.3] 메일 제목 변경: [날짜] 데일리 뉴스 리포트 ✨
-    mail_date = datetime.now().strftime('%m/%d')
     msg = MIMEMultipart("alternative")
     msg['Subject'] = f"[{mail_date}] 🏛️ 데일리 뉴스 리포트 ✨"
     msg['From'] = EMAIL_ADDRESS
@@ -241,5 +249,5 @@ if __name__ == "__main__":
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
             s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             s.send_message(msg)
-        print(f"✅ 총 {len(RECIPIENTS)}명에게 발송 완료!")
+        print(f"✅ 총 {len(RECIPIENTS)}명 발송 완료! (중복 제거 및 지분 확보 적용)")
     except Exception as e: print(f"❌ 발송 실패: {e}")
