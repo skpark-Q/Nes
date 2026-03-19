@@ -2,7 +2,7 @@
 ================================================================================
 [ 🏛️ VIP 주식 전략 리포트 - 통합 설계 변경 이력 (Design Change History) ]
 ================================================================================
-최종 수정일: 2026-03-19 | 현재 버전: v3.5
+최종 수정일: 2026-03-19 | 현재 버전: v3.6
 --------------------------------------------------------------------------------
 날짜        | 버전         | 설계 변경 및 업데이트 내역
 --------------------------------------------------------------------------------
@@ -18,7 +18,8 @@
 2026-03-19 | v3.2         | 불필요 태그([속보] 등) 제거 로직 적용
 2026-03-19 | v3.3         | 국내/국제 섹션 분리(7개씩), 출처 표기 제거 적용
 2026-03-19 | v3.4         | 경제 기사 지분 고정 및 키워드 기반 중복 차단 시도
-2026-03-19 | v3.5         | [최신] 교집합 연산을 통한 초정밀 중복 필터 및 금지어 강화 (v3.2, v3.5)
+2026-03-19 | v3.5         | 교집합 연산을 통한 초정밀 중복 필터 및 금지어 강화
+2026-03-19 | v3.6         | [최신] 투자 지표 가이드 내 VIX 기준 추가 및 뉴스 수집 예외 처리 강화
 ================================================================================
 """
 
@@ -29,14 +30,19 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
-# [1. 환경 변수 및 수신인 설정]
+# [1. 환경 변수 및 수신인 설정] --------------------------------------------------
 EMAIL_ADDRESS = os.environ.get('EMAIL_ADDRESS')
 EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
 
 RECIPIENTS = [
-    EMAIL_ADDRESS           # 형님 본인
-    ]
+    EMAIL_ADDRESS,           # 형님 본인
+    "yhkwon@spigen.com",     # 파트너 1
+    "jynoh@spigen.com",      # 파트너 2
+    "mako@spigen.com",       # 파트너 3
+    "jhkang@spigen.com"      # 파트너 4
+]
 
+# [2. 분석 대상 종목 데이터베이스] ------------------------------------------------
 STOCK_MAP = {
     "애플": "AAPL", "마이크로소프트": "MSFT", "엔비디아": "NVDA", "알파벳": "GOOGL",
     "아마존": "AMZN", "메타": "META", "테슬라": "TSLA", "브로드컴": "AVGO",
@@ -127,13 +133,11 @@ def fetch_korean_news(brand):
 
 def fetch_categorized_headlines(queries_with_counts):
     """
-    [2026-03-19 v3.5] 교집합 연산을 통한 초정밀 중복 필터 및 금지어 숙청 로직
+    [2026-03-19 v3.5, v3.6] 교집합 연산을 통한 중복 필터 및 수집 안정화 로직
     """
-    # 🚫 형님이 싫어하시는 한가한 기사들 (v3.5 강화)
     black_list = ["책 소개", "도서", "신간", "출판", "오늘의 뉴스", "데일리 뉴스", "일정", "가이드", "조간", "브리핑"]
-    
     found_html = []
-    seen_word_sets = [] # 기사별 단어 집합 저장
+    seen_word_sets = []
 
     for sub_query, count in queries_with_counts.items():
         q = urllib.parse.quote(f"{sub_query} when:1d")
@@ -148,42 +152,35 @@ def fetch_categorized_headlines(queries_with_counts):
                 if any(word in title for word in black_list): continue
                 if bool(re.search('[가-힣]', title)):
                     clean_t = clean_news_title(title)
-                    
-                    # 🔥 [v3.5 핵심] 교집합 기반 중복 체크
-                    # 1. 현재 제목에서 2글자 이상 한글 단어만 추출
                     current_words = set(re.findall(r'[가-힣]{2,}', clean_t))
                     if not current_words: continue
                     
-                    # 2. 기존에 수집한 기사들의 단어 셋과 비교
                     is_duplicate = False
                     for seen_set in seen_word_sets:
                         intersect = current_words & seen_set
-                        # 단어가 2개 이상 겹치거나, 전체의 40% 이상이 겹치면 중복!
                         if len(intersect) >= 2 or (len(intersect) / len(current_words)) >= 0.4:
                             is_duplicate = True
                             break
-                    
                     if is_duplicate: continue
                     
-                    # 3. 통과 시 저장
                     seen_word_sets.append(current_words)
                     found_html.append(f"<li style='margin-bottom:6px;'><a href='{item.link.text}' style='color:#111; text-decoration:none; font-size:13px;'>• {clean_t}</a></li>")
                     items_collected += 1
-                    
                 if items_collected >= count: break
         except: pass
     
-    return "".join(found_html[:7])
+    # [2026-03-19 v3.6] 수집 결과가 아예 없을 경우 예외 처리
+    return "".join(found_html[:7]) if found_html else "<li>오늘의 주요 뉴스가 없습니다.</li>"
 
 if __name__ == "__main__":
-    print("🚀 VIP 전략 리포트 생성 프로세스 가동... (v3.5 초정밀 필터 적용)")
+    print("🚀 VIP 리포트 생성 프로세스 가동... (v3.6 VIX 가이드 보강 버전)")
     m_context = get_market_summary()
     
-    # [v3.4, v3.5] 국내: 경제 4 + 사회 3 지분 고정 및 정밀 필터링
+    # 국내: 경제 4 + 사회 3 지분 고정
     domestic_html = fetch_categorized_headlines({"경제 주요 분석": 4, "사회 핵심 소식": 3})
     
-    # [v3.3, v3.5] 국제: 7개 정밀 필터링
-    intl_html = fetch_categorized_headlines({"국제 세계 정세 분석": 7})
+    # 국제: [v3.6] 검색 범위를 조금 더 넓혀서 수집 안정성 확보
+    intl_html = fetch_categorized_headlines({"국제 정세 세계 뉴스": 7})
     
     mail_date = datetime.now().strftime('%m/%d')
     html = f"""
@@ -191,21 +188,26 @@ if __name__ == "__main__":
     <body style="font-family: 'Malgun Gothic', sans-serif; background-color: #ffffff; padding: 20px;">
         <div style="max-width: 650px; margin: auto; border: 2px solid #111; padding: 25px; border-radius: 10px;">
             <h1 style="border-bottom: 4px solid #111; padding-bottom: 10px; margin: 0; text-align: center;">🏛️ VIP 주식 전략 리포트</h1>
+            
             <div style="background: #f8f9fa; border: 1px solid #ddd; padding: 15px; margin-top: 20px; font-size: 12px; line-height: 1.6;">
                 <b style="font-size: 14px; color: #111;">[📊 투자 지표 컬러 가이드]</b><br>
+                • <b>공포지수(VIX):</b> <span style="color:#1a73e8;">20미만(🔵안정)</span> / <span style="color:#f9ab00;">20~30(🟠주의)</span> / <span style="color:#d93025;">30초과(🔴패닉)</span><br>
                 • <b>상승여력:</b> 전문가 목표가 대비 <span style="color:#1a73e8;">15%↑(🔵기회)</span> / <span style="color:#d93025;">마이너스(🔴위험)</span><br>
                 • <b>저점대비:</b> 52주 저점에서 <span style="color:#1a73e8;">10%이내(🔵바닥)</span> / <span style="color:#d93025;">30%↑(🔴과열)</span><br>
                 • <b>PER:</b> <span style="color:#1a73e8;">25미만(🔵저평가)</span> / <span style="color:#d93025;">40초과(🔴고평가)</span><br>
                 • <b>배당률:</b> <span style="color:#1a73e8;">3%↑(🔵혜자)</span> / <span style="color:#d93025;">1%미만(🔴낮음)</span>
             </div>
+
             <div style="margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
                 <b style="font-size: 15px; color: #111;">🇰🇷 국내 주요 소식 (7)</b>
                 <ul style="margin: 10px 0 0 0; padding-left: 18px;">{domestic_html}</ul>
             </div>
+
             <div style="margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
                 <b style="font-size: 15px; color: #111;">🌎 국제/해외 주요 소식 (7)</b>
                 <ul style="margin: 10px 0 0 0; padding-left: 18px;">{intl_html}</ul>
             </div>
+
             <p style="padding: 12px; background: #111; color:#fff; font-size: 14px; margin-top: 15px;"><b>🌍 오늘의 전장 상황:</b> {m_context}</p>
     """
 
@@ -222,7 +224,7 @@ if __name__ == "__main__":
                 <div style="text-align: right;"><b style="color:{text_color}; font-size: 20px;">{d['pct']:+.2f}%</b><div style="font-size: 14px; font-weight:bold;">${d['price']}</div></div>
             </div>
             <div style="padding: 15px; background: #fff;">
-                <table style="width: 100%; font-size: 13px; margin-bottom: 12px;">
+                <table style="width: 100%; font-size: 13px; border-collapse: collapse; margin-bottom: 12px;">
                     <tr><td>상승여력: <b style="color:{d['u_color']};">{d['upside']}</b></td><td>저점대비: <b style="color:{d['l_color']};">{d['dist_low']}</b></td></tr>
                     <tr><td>PER: <b style="color:{d['p_color']};">{d['per']}배</b></td><td>배당률: <b style="color:{d['d_color']};">{d['div']}</b></td></tr>
                     <tr><td>투자의견: <b>{d['opinion']}</b></td><td>시가총액: <b>{d['cap']}</b></td></tr>
@@ -242,5 +244,5 @@ if __name__ == "__main__":
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
             s.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             s.send_message(msg)
-        print("✅ 발송 완료! (v3.5 초정밀 필터 적용)")
+        print("✅ 발송 완료! (v3.6 가이드 보강 및 수집 안정화)")
     except Exception as e: print(f"❌ 발송 실패: {e}")
